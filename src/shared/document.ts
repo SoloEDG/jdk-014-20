@@ -41,10 +41,4 @@ export interface ReadingLocation {
   x: number;
   y: number;
 }
-export interface Bookmark {
-  id: string;
-  label: string;
-  location: ReadingLocation;
-  created: number;
-}
 export type ReadingMode = "page" | "panel";

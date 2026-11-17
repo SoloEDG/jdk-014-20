@@ -7,7 +7,7 @@ import {
   Scan,
   Minus,
   Plus,
-  Bookmark,
+  Crosshair,
   Cloud,
   PanelLeftClose,
 } from "lucide-vue-next";
@@ -16,24 +16,20 @@ import { ChapterPanel } from "../features/chapters";
 import { ReaderStage, PanelStrip } from "../features/reader";
 import { AudioPanel } from "../features/audio";
 import { ProgressPanel } from "../features/progress";
+import { FavoritePanel, FavoriteDialog, QuotaDialog } from "../features/favorites";
+import { EditingPanel } from "../features/editing";
 import { useWorkspace } from "./workspace";
-const {
-  doc,
-  reader: r,
-  progress: p,
-  library: l,
-  chapters: c,
-  audio: a,
-} = useWorkspace();
+
+const w = useWorkspace();
+const { doc, reader: r, progress: p, library: l, chapters: c, audio: a } = w;
+const { favorites: f, editing: e } = w;
 const current = r.current,
   at = r.location,
   mode = r.mode,
   metrics = p.metrics,
-  bookmarks = p.bookmarks,
-  status = p.status,
   cue = a.cue;
 const chapterIndex = computed(
-  () => doc.value.chapters.findIndex((c) => c.id === at.value.chapterId) + 1,
+  () => doc.value.chapters.findIndex((ch) => ch.id === at.value.chapterId) + 1,
 );
 function focus(id: string) {
   r.dispatch({ type: "panel", id });
@@ -93,7 +89,7 @@ function focus(id: string) {
           @reset="l.reset"
         />
         <div class="sidebar-footer">
-          <PanelLeftClose :size="14" /> 你的私人漫画放映室 <span>v1.0</span>
+          <PanelLeftClose :size="14" /> 你的私人漫画放映室 <span>v2.0</span>
         </div>
       </aside>
       <main class="reading-workspace">
@@ -124,8 +120,13 @@ function focus(id: string) {
             ><span class="zoom-value">{{ Math.round(at.zoom * 100) }}%</span
             ><button aria-label="放大" @click="r.zoom(0.2)">
               <Plus :size="15" /></button
-            ><button title="收藏当前分镜" @click="p.add">
-              <Bookmark :size="16" />
+            ><button
+              class="select-button"
+              :class="{ active: r.selecting.value }"
+              title="框选细节并收藏 (S)"
+              @click="r.selecting.value ? r.endSelecting() : r.startSelecting()"
+            >
+              <Crosshair :size="16" /> 框选收藏
             </button>
           </div>
         </div>
@@ -135,9 +136,22 @@ function focus(id: string) {
           :panel="current.panel"
           :location="at"
           :mode="mode"
+          :selecting="r.selecting.value"
+          :focus-region="r.focusRegion.value"
+          :is-preview="r.isPreview.value"
+          :preview-label="w.previewLabel.value"
+          :stale-region="
+            w.relocatingFavorite.value &&
+            w.relocatingFavorite.value.location.pageId === current.page.id
+              ? w.relocatingFavorite.value.region
+              : null
+          "
           @move="r.dispatch({ type: 'move', delta: $event })"
           @pan="r.pan"
           @panel="focus"
+          @select="w.onStageSelect"
+          @cancel-select="r.endSelecting(); w.cancelRelocate()"
+          @exit-preview="r.exitPreview()"
         />
         <div class="page-position">
           <span>{{ current.chapter?.subtitle }}</span>
@@ -154,6 +168,19 @@ function focus(id: string) {
           :active="at.panelId"
           @select="focus"
         />
+        <EditingPanel
+          v-if="current.page"
+          :chapters="doc.chapters"
+          :page="current.page"
+          :panel-id="at.panelId"
+          :busy="e.busy.value"
+          :message="e.message.value"
+          :reconciling="f.reconciling.value"
+          :stale-count="f.staleCount.value"
+          @copy="w.onCopy"
+          @crop="w.onCrop"
+          @replace="w.onReplace"
+        />
       </main>
       <aside class="right-sidebar">
         <AudioPanel
@@ -165,22 +192,52 @@ function focus(id: string) {
           @toggle="a.toggle"
           @volume="a.volume.value = $event"
           @dialogue="a.dialogue.value = !a.dialogue.value"
-        /><ProgressPanel
-          :bookmarks="bookmarks"
-          :percent="metrics.percent"
-          :status="status"
-          @add="p.add"
-          @remove="p.remove"
-          @restore="r.dispatch({ type: 'restore', location: $event })"
         />
+        <FavoritePanel
+          :collections="f.collections.value"
+          :favorites="f.favorites.value"
+          :active-collection-id="f.activeCollectionId.value"
+          :settings="f.settings.value"
+          :evidence-used="f.evidenceUsed.value"
+          :quota-percent="f.quotaPercent.value"
+          :reconciling="f.reconciling.value"
+          :preview-favorite-id="r.preview.value?.favoriteId ?? ''"
+          :relocating-id="w.relocatingId.value"
+          @select-collection="f.activeCollectionId.value = $event"
+          @add-collection="f.addCollection($event)"
+          @rename-collection="f.renameCollection($event[0], $event[1])"
+          @request-export-collection="w.requestExportCollection"
+          @request-delete-collection="w.requestDeleteCollection"
+          @open="w.openFavorite"
+          @relocate="w.startRelocate"
+          @remove="f.removeFavorite"
+          @clear-evidence="f.clearEvidence"
+          @rename-favorite="f.renameFavorite($event[0], $event[1])"
+          @update-settings="f.updateSettings($event)"
+        />
+        <ProgressPanel :percent="metrics.percent" :status="f.status.value" />
         <div class="reading-tip">
-          <span>✦ 阅读小贴士</span>
-          <p>试试逐格模式，让画面与声音<br />带你走进故事的深处。</p>
-          <kbd>←</kbd><kbd>→</kbd> <small>切换画面</small><br /><kbd>Space</kbd>
-          <small>播放 / 暂停声景</small>
+          <span>✦ 收藏小贴士</span>
+          <p>框选格内细节并命名，点击收藏即可放大回看；<br />编辑画面后失效收藏会明确标记，等你重新定位。</p>
+          <kbd>S</kbd> <small>框选收藏</small><br /><kbd>Esc</kbd>
+          <small>退出框选 / 返回续读</small>
         </div>
       </aside>
     </div>
+    <FavoriteDialog
+      :open="w.dialogOpen.value"
+      :collections="f.collections.value"
+      :active-collection-id="f.activeCollectionId.value"
+      :default-label="w.dialogDefaultLabel.value"
+      @save="w.onDialogSave"
+      @create-collection="f.addCollection($event)"
+      @cancel="f.cancelCreate(); (w.dialogOpen.value = false)"
+    />
+    <QuotaDialog
+      :plan="f.quotaPlan.value"
+      @confirm="w.onQuotaConfirm()"
+      @cancel="w.onQuotaCancel()"
+    />
     <footer class="app-footer">
       <span><i></i> 所有故事，都有回声。</span
       ><span>PANEL · 为每一格想象而生</span

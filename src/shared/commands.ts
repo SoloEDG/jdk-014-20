@@ -3,7 +3,8 @@ export type ReaderCommand =
   | { type: "chapter"; id: string }
   | { type: "move"; delta: number }
   | { type: "panel"; id: string }
-  | { type: "restore"; location: ReadingLocation };
+  | { type: "restore"; location: ReadingLocation }
+  | { type: "exit-preview" };
 export interface Notice {
   text: string;
   tone: "success" | "error";
